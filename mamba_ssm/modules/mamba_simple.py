@@ -101,14 +101,26 @@ class Mamba(nn.Module):
         self.dt_proj.bias._no_reinit = True
 
         # S4D real initialization
-        A = repeat(
-            torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
-            "n -> d n",
-            d=self.d_inner,
-        ).contiguous()
-        A_log = torch.log(A)  # Keep A_log in fp32
-        self.A_log = nn.Parameter(A_log)
-        self.A_log._no_weight_decay = True
+        # A = repeat(
+        #     torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
+        #     "n -> d n",
+        #     d=self.d_inner,
+        # ).contiguous()
+        # A_log = torch.log(A)  # Keep A_log in fp32
+        # self.A_log = nn.Parameter(A_log)
+        # self.A_log._no_weight_decay = True
+
+        ################################################################################################
+        # S4D complex initialization
+        log_A_real = torch.log(0.5 * torch.ones(self.d_inner, self.d_state))
+        A_imag = math.pi * repeat(torch.arange(self.d_state), 'n -> h n', h=self.d_inner)
+        
+        self.log_A_real = nn.Parameter(log_A_real)
+        self.log_A_real._no_weight_decay = True 
+        
+        self.A_imag = nn.Parameter(A_imag)
+        self.A_imag._no_weight_decay = True 
+        ################################################################################################
 
         # D "skip" parameter
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
@@ -140,7 +152,14 @@ class Mamba(nn.Module):
         if self.in_proj.bias is not None:
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
 
-        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+        # real-valued
+        # A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        ################################################################################################
+        # complex-valued        
+        A = -torch.exp(self.log_A_real) + 1j * self.A_imag
+        ################################################################################################
+
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and causal_conv1d_fn is not None and inference_params is None:  # Doesn't support outputting the states
             out = mamba_inner_fn(
